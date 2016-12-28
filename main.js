@@ -1,143 +1,57 @@
-const fs = require('fs')
-const parse = require('csv-parse')
-const async = require('async')
+const http = require('http')
 const mongodb = require('mongodb')
+const url = require('url')
 const { MongoClient } = mongodb
 
-const trips = './csv/trips.txt'
-const shapes = './csv/shapes.txt'
-const url = 'mongodb://localhost:27017/busRoutes'
+const PORT = 3000
+const mongoUrl = 'mongodb://localhost:27017/busRoutes'
+let time = 0
 
-class BusRoutesCsvParser {
-	init() {
-		MongoClient.connect(url, (err, db) => {
-			if (err) {
-				console.log('mongo connection error', err)
-				return
-			}
+http.createServer((req, res) => {
+	time = new Date().getTime()
+	let params = url.parse(req.url, true).query
 
-			let collection = db.collection('trips')
+	if (params !== null && typeof params.line !== 'undefined')
+		getRoute(params.line).then((data) => {
+			time = new Date().getTime() - time
+			console.log('Request took ' + time + 'ms to finish')
+			res.end(JSON.stringify(data))
 
-			var count = collection.count().then((rows) => {
-				if (rows === 0)
-					this.update()
-				else
-					console.log('DB HAS ITEMS')
-			})
-
-			db.close()
 		})
-	}
 
-	update() {
-		this.readTrips()
-			.then(this.readShapes.bind(this))
-			.then(() => {
-				console.log('pego a porra toda')
-			})
-	}
+	else
+		res.end('opa')
 
-	readTrips() {
-		return new Promise((resolve, reject) => {
-			let lineNumber = 0
+}).listen(PORT)
 
-			let parser = parse({ delimiter: ',' }, (err, data) => {
-				let length = data.length
-				console.log('READING TRIPS DATA FROM CSV FILE...')
+console.log("REST API listening on: http://localhost:%s", PORT)
 
-				async.eachSeries(data, (rowData, callback) => {
-					let row = {}
-
-					if (lineNumber > 1) {
-						row = {
-							route: rowData[0],
-							service: rowData[1],
-							trip: rowData[2],
-							name: rowData[3],
-							direction: rowData[4],
-							shape: rowData[5]
-						}
-						
-						this.insertData('trips', row).then(() => {
-							if (lineNumber === length)
-								resolve()
-
-							callback()
-						})
-
-						lineNumber++
-					} else {
-						lineNumber++
-
-						callback()
-					}
-
-
-				})
-			})
-			
-			fs.createReadStream(trips).pipe(parser)
+function getRoute(trip) {
+	return new Promise((resolve, reject) => {
+		fetchItem('trips', { trip }).then((data) => {
+			console.log('data', data);
+			fetchItem('shapes', { id: data.shape }).then(resolve)
 		})
-	}
-
-	readShapes() {
-		return new Promise((resolve, reject) => {
-			let lineNumber = 0
-
-			let parser = parse({ delimiter: ',' }, (err, data) => {
-				let length = data.length
-				console.log('READING SHAPE DATA FROM CSV FILE...')
-
-				async.eachSeries(data, (rowData, callback) => {
-					let row = {}
-
-					if (lineNumber > 1) {
-						row = {
-							id: rowData[0],
-							coordinates: [
-								rowData[1], rowData[2]
-							],
-							sequence: rowData[3],
-							dist: rowData[4]
-						}
-
-						this.insertData('shapes', row).then(() => {
-							if (lineNumber === length)
-								resolve()
-
-							lineNumber++
-							callback()
-						})
-					} else {
-						lineNumber++
-						callback()
-					}
-				})
-			})
-			
-			fs.createReadStream(shapes).pipe(parser)
-		})
-	}
-
-	insertData(collectionName, data) {
-		return new Promise((resolve, reject) => {
-			MongoClient.connect(url, (err, db) => {
-				if (err) {
-					console.log('mongo connection error')
-					return
-				}
-
-				let collection = db.collection(collectionName)
-
-				collection.insert(data)
-
-				db.close()
-				resolve()
-			})
-		})
-	}
+	})
 }
 
-var routes = new BusRoutesCsvParser()
+function fetchItem(collectionName, query) {
+	return new Promise((resolve, reject) => {
+		MongoClient.connect(mongoUrl, (err, db) => {
+			if (!err) {
+				let collection = db.collection(collectionName)
 
-routes.init()
+				collection.findOne(query).then((data, err) => {
+					if (!err) 
+						resolve(data)
+
+					db.close()
+				})
+
+			} else {
+				resolve()
+				db.close()
+			}
+		})
+	})
+}
